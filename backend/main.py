@@ -293,12 +293,44 @@ async def list_challenges(sector: str = None, difficulty: str = None):
 
 
 @app.get("/api/leaderboard")
-async def get_leaderboard(limit: int = 20, sector: str = None):
-    """Fetch leaderboard from Supabase view."""
+async def get_leaderboard(page: int = 1, limit: int = 20, sector: str = None):
+    """Fetch leaderboard from Supabase view with pagination and metadata."""
     if not supabase:
-        return []
-    query = supabase.table("leaderboard").select("*").limit(limit)
-    if sector:
-        query = query.eq("sector", sector)
-    result = query.execute()
-    return result.data
+        return {"data": [], "metadata": {"total": 0, "page": page, "limit": limit}}
+        
+    if page < 1:
+        raise HTTPException(status_code=400, detail="Page must be >= 1")
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=400, detail="Limit must be between 1 and 100")
+
+    start = (page - 1) * limit
+    end = start + limit - 1
+
+    try:
+        query = supabase.table("leaderboard").select("*", count="exact")
+        if sector:
+            query = query.eq("sector", sector)
+            
+        # Order by score descending
+        query = query.order("score", desc=True)
+            
+        result = query.range(start, end).execute()
+        
+        # Calculate rankings based on the offset
+        data = result.data
+        for i, row in enumerate(data):
+            row["rank"] = start + i + 1
+            
+        total_count = result.count if result.count is not None else len(data)
+
+        return {
+            "data": data,
+            "metadata": {
+                "total": total_count,
+                "page": page,
+                "limit": limit,
+                "total_pages": (total_count + limit - 1) // limit if total_count > 0 else 1
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
